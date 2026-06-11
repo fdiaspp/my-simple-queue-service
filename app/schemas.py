@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -18,20 +17,8 @@ class TopicListItem(BaseModel):
     created_at: datetime
 
 
-class PutMessageRequest(BaseModel):
-    payload: Any = Field(..., description="Arbitrary JSON payload")
-
-
 class PutMessageResponse(BaseModel):
     message_id: int
-
-
-class AcquireMessageResponse(BaseModel):
-    message_id: int
-    payload: Any
-    retrieval_count: int
-    receipt_token: str
-    lease_expires_at: datetime
 
 
 class AckMessageRequest(BaseModel):

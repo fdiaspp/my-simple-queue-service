@@ -40,38 +40,36 @@ def test_create_put_acquire_ack_fifo(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     topic_id, _ = create_topic(client)
 
-    first = client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": {"value": 1}})
-    second = client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": {"value": 2}})
+    first = client.post(f"/api/v1/topics/{topic_id}/message", content=b"first")
+    second = client.post(f"/api/v1/topics/{topic_id}/message", content=b"second")
     assert first.status_code == 201
     assert second.status_code == 201
 
     acquired = client.get(f"/api/v1/topics/{topic_id}/message")
     assert acquired.status_code == 200
-    body = acquired.json()
-    assert body["payload"] == {"value": 1}
-    assert body["retrieval_count"] == 1
+    assert acquired.content == b"first"
+    assert acquired.headers["x-queue-retrieval-count"] == "1"
 
     ack = client.post(
-        f"/api/v1/topics/{topic_id}/message/{body['message_id']}/ack",
-        json={"receipt_token": body["receipt_token"]},
+        f"/api/v1/topics/{topic_id}/message/{acquired.headers['x-queue-message-id']}/ack",
+        json={"receipt_token": acquired.headers["x-queue-receipt-token"]},
     )
     assert ack.status_code == 204
 
     acquired_again = client.get(f"/api/v1/topics/{topic_id}/message")
     assert acquired_again.status_code == 200
-    assert acquired_again.json()["payload"] == {"value": 2}
+    assert acquired_again.content == b"second"
 
 
 def test_ack_rejects_invalid_token(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     topic_id, _ = create_topic(client)
-    client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": "hello"})
+    client.post(f"/api/v1/topics/{topic_id}/message", content=b"hello")
 
     acquired = client.get(f"/api/v1/topics/{topic_id}/message")
-    message = acquired.json()
 
     response = client.post(
-        f"/api/v1/topics/{topic_id}/message/{message['message_id']}/ack",
+        f"/api/v1/topics/{topic_id}/message/{acquired.headers['x-queue-message-id']}/ack",
         json={"receipt_token": "invalid"},
     )
     assert response.status_code == 409
@@ -80,21 +78,21 @@ def test_ack_rejects_invalid_token(tmp_path: Path) -> None:
 def test_retrieval_count_is_persisted_across_acquires(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     topic_id, _ = create_topic(client)
-    client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": "counter"})
+    client.post(f"/api/v1/topics/{topic_id}/message", content=b"counter")
 
     first = client.get(f"/api/v1/topics/{topic_id}/message")
     second = client.get(f"/api/v1/topics/{topic_id}/message")
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json()["retrieval_count"] == 1
-    assert second.json()["retrieval_count"] == 2
+    assert first.headers["x-queue-retrieval-count"] == "1"
+    assert second.headers["x-queue-retrieval-count"] == "2"
 
 
 def test_clear_topic_removes_messages_from_topic_and_dlq(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     topic_id, _ = create_topic(client)
-    client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": "a"})
+    client.post(f"/api/v1/topics/{topic_id}/message", content=b"a")
     client.post(f"/api/v1/topics/{topic_id}/clear")
 
     acquire = client.get(f"/api/v1/topics/{topic_id}/message")
@@ -104,13 +102,13 @@ def test_clear_topic_removes_messages_from_topic_and_dlq(tmp_path: Path) -> None
 def test_moves_to_dead_letter_after_ten_acquires(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     topic_id, dlq_id = create_topic(client)
-    client.post(f"/api/v1/topics/{topic_id}/message", json={"payload": "retry-me"})
+    client.post(f"/api/v1/topics/{topic_id}/message", content=b"retry-me")
 
     latest = None
     for _ in range(9):
         acquired = client.get(f"/api/v1/topics/{topic_id}/message")
         assert acquired.status_code == 200
-        latest = acquired.json()
+        latest = acquired
 
     assert latest is not None
 

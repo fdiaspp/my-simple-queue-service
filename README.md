@@ -27,6 +27,10 @@ A small FIFO queue service built with FastAPI and SQLite.
 - `GET /api/v1/topics/{topic_id}/message`
 - `POST /api/v1/topics/{topic_id}/message/{message_id}/ack`
 
+The `POST /api/v1/topics/{topic_id}/message` endpoint accepts the raw request body and stores it as bytes.
+The `GET /api/v1/topics/{topic_id}/message` response returns the payload as raw binary data.
+Metadata is returned in headers like `X-Queue-Message-Id` and `X-Queue-Receipt-Token`.
+
 ## Run
 
 ```bash

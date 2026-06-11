@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 from uuid import uuid4
 
 
@@ -85,7 +84,7 @@ class QueueStore:
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     topic_id TEXT NOT NULL,
-                    payload TEXT NOT NULL,
+                    payload BLOB NOT NULL,
                     created_at TEXT NOT NULL,
                     retrieval_count INTEGER NOT NULL DEFAULT 0,
                     lease_token TEXT,
@@ -154,15 +153,14 @@ class QueueStore:
         with self._transaction() as conn:
             conn.execute("DELETE FROM messages WHERE topic_id = ? OR topic_id = ?", (topic.topic_id, topic.dead_letter_topic_id))
 
-    def put_message(self, topic_id: str, payload: Any) -> int:
+    def put_message(self, topic_id: str, payload: bytes) -> int:
         topic = self._get_user_topic(topic_id)
-        payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         now = self._now()
 
         with self._transaction() as conn:
             cursor = conn.execute(
                 "INSERT INTO messages (topic_id, payload, created_at, retrieval_count) VALUES (?, ?, ?, 0)",
-                (topic.topic_id, payload_json, now),
+                (topic.topic_id, sqlite3.Binary(payload), now),
             )
             return int(cursor.lastrowid)
 
@@ -189,7 +187,7 @@ class QueueStore:
 
                 message_id = int(row["id"])
                 retrieval_count = int(row["retrieval_count"]) + 1
-                payload = json.loads(row["payload"])
+                payload = self._payload_to_bytes(row["payload"])
 
                 if retrieval_count >= MAX_RETRIEVALS:
                     self._move_to_dead_letter(conn, topic.dead_letter_topic_id, row, retrieval_count)
@@ -241,11 +239,11 @@ class QueueStore:
         retrieval_count: int,
     ) -> None:
         conn.execute(
-            """
-            INSERT INTO messages (topic_id, payload, created_at, retrieval_count, source_message_id)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (dlq_topic_id, row["payload"], row["created_at"], retrieval_count, int(row["id"])),
+                """
+                INSERT INTO messages (topic_id, payload, created_at, retrieval_count, source_message_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+            (dlq_topic_id, sqlite3.Binary(self._payload_to_bytes(row["payload"])), row["created_at"], retrieval_count, int(row["id"])),
         )
         conn.execute("DELETE FROM messages WHERE id = ?", (int(row["id"]),))
 
@@ -274,3 +272,13 @@ class QueueStore:
     @staticmethod
     def _utc_datetime() -> datetime:
         return datetime.now(UTC)
+
+    @staticmethod
+    def _payload_to_bytes(payload: object) -> bytes:
+        if isinstance(payload, bytes):
+            return payload
+        if isinstance(payload, memoryview):
+            return payload.tobytes()
+        if isinstance(payload, str):
+            return payload.encode("utf-8")
+        return bytes(payload)

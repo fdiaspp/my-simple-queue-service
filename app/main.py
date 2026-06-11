@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 
 from app.schemas import (
     AckMessageRequest,
-    AcquireMessageResponse,
     CreateTopicResponse,
-    PutMessageRequest,
     PutMessageResponse,
     TopicListItem,
 )
@@ -70,15 +68,15 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/v1/topics/{topic_id}/message", response_model=PutMessageResponse, status_code=status.HTTP_201_CREATED)
-    def put_message(topic_id: str, request: PutMessageRequest) -> PutMessageResponse:
+    async def put_message(topic_id: str, request: Request) -> PutMessageResponse:
         try:
-            message_id = store.put_message(topic_id, request.payload)
+            message_id = store.put_message(topic_id, await request.body())
         except TopicNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Topic not found") from exc
         return PutMessageResponse(message_id=message_id)
 
-    @app.get("/api/v1/topics/{topic_id}/message", response_model=AcquireMessageResponse)
-    def acquire_message(topic_id: str) -> AcquireMessageResponse:
+    @app.get("/api/v1/topics/{topic_id}/message")
+    def acquire_message(topic_id: str) -> Response:
         try:
             message = store.acquire_message(topic_id)
         except TopicNotFoundError as exc:
@@ -87,7 +85,16 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         if message is None:
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-        return AcquireMessageResponse(**message)
+        return Response(
+            content=message["payload"],
+            media_type="application/octet-stream",
+            headers={
+                "X-Queue-Message-Id": str(message["message_id"]),
+                "X-Queue-Receipt-Token": message["receipt_token"],
+                "X-Queue-Retrieval-Count": str(message["retrieval_count"]),
+                "X-Queue-Lease-Expires-At": message["lease_expires_at"].isoformat(),
+            },
+        )
 
     @app.post("/api/v1/topics/{topic_id}/message/{message_id}/ack", status_code=status.HTTP_204_NO_CONTENT)
     def ack_message(topic_id: str, message_id: int, request: AckMessageRequest) -> None:
